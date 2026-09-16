@@ -1,0 +1,33 @@
+@baseUrl = http://localhost:8000
+@recordingId = rec_replace_me
+@taskId = task_replace_me
+
+### Health
+GET {{baseUrl}}/health
+
+### Upload recording
+POST {{baseUrl}}/v1/recordings
+Idempotency-Key: demo-audio-001
+Content-Type: multipart/form-data; boundary=boundary
+
+--boundary
+Content-Disposition: form-data; name="file"; filename="sample.mp3"
+Content-Type: audio/mpeg
+
+< ./sample.mp3
+--boundary--
+
+### Get task
+GET {{baseUrl}}/v1/tasks/{{taskId}}
+
+### List recordings
+GET {{baseUrl}}/v1/recordings?page=1&page_size=20
+
+### Get recording detail
+GET {{baseUrl}}/v1/recordings/{{recordingId}}
+
+### Retry failed task
+POST {{baseUrl}}/v1/tasks/{{taskId}}/retry
+
+### Delete recording
+DELETE {{baseUrl}}/v1/recordings/{{recordingId}}
