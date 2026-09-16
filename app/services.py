@@ -29,6 +29,7 @@ class Transcriber:
         self.settings = settings
 
     async def transcribe(self, recording_id: str) -> str:
+        # Mock ASR behavior required by the assignment: delay, failure rate, then transcript text.
         delay = random.uniform(5, 15)
         logger.info("recording=%s transcribe mock delay=%.2fs", recording_id, delay)
         await asyncio.sleep(delay)
@@ -44,7 +45,9 @@ class Summarizer:
     async def summarize(self, transcript: str) -> dict[str, Any]:
         if self.settings.llm_provider.lower() == "mock" or not self.settings.llm_api_key:
             return self._mock_summary(transcript)
-        return await self._llm_summary(transcript)
+        draft = await self._llm_summary(transcript)
+        # Second pass removes key points and todos that are not supported by the transcript.
+        return await self._llm_validate_summary(transcript, draft)
 
     def _mock_summary(self, transcript: str) -> dict[str, Any]:
         todos = []
@@ -66,23 +69,50 @@ class Summarizer:
             "请根据下面录音转写文本生成 JSON，且只输出 JSON。\n"
             "字段要求：\n"
             "1. summary：用一句话概括录音核心内容。\n"
-            "2. key_points：提炼录音中的关键要点。\n"
+            "2. key_points：提炼录音中的关键要点，每一项必须是通顺、简洁、完整的中文句子。\n"
             "3. todos：只提取录音中明确出现的待办事项、后续动作、负责人安排或截止时间。\n"
             "4. 不要编造待办事项；如果录音中没有明确待办事项，todos 必须返回空数组 []。\n"
             '格式必须为 {"summary":"一句话摘要","key_points":["要点"],"todos":["待办"]}。\n\n'
             f"转写文本：{transcript}"
         )
+        messages = [
+            {
+                "role": "system",
+                "content": "你是严谨的会议摘要助手，只返回可解析 JSON。不要编造 transcript 中没有出现的信息。",
+            },
+            {"role": "user", "content": prompt},
+        ]
+        return await self._request_summary_json(messages, "LLM summary response is not valid JSON")
+
+    async def _llm_validate_summary(self, transcript: str, draft: dict[str, Any]) -> dict[str, Any]:
+        prompt = (
+            "你需要校验一份录音摘要结果是否都有 transcript 原文依据。\n"
+            "请只根据 transcript 判断，不要使用外部知识，不要补充 transcript 中没有的信息。\n"
+            "校验规则：\n"
+            "1. summary 必须只概括 transcript 中能支持的内容；如果原 summary 有夸大或无依据，请改写为有依据的一句话。\n"
+            "2. key_points 中每一项都必须能从 transcript 找到依据；找不到依据的要点直接删除。\n"
+            "3. todos 中每一项都必须是 transcript 中明确出现的待办事项、后续动作、负责人安排或截止时间；找不到依据的待办直接删除。\n"
+            "4. 保留下来的 key_points 必须是通顺、简洁、完整的中文句子；可以在不改变原文含义、不新增信息的前提下润色表达。\n"
+            "5. 如果没有任何有依据的待办事项，todos 返回 []。\n"
+            "6. 只返回清洗后的 JSON，字段仍然是 summary、key_points、todos。\n\n"
+            f"transcript：{transcript}\n\n"
+            f"待校验结果：{json.dumps(draft, ensure_ascii=False)}"
+        )
+        messages = [
+            {
+                "role": "system",
+                "content": "你是事实校验助手。你的任务是删除没有原文依据的要点和待办，只返回可解析 JSON。",
+            },
+            {"role": "user", "content": prompt},
+        ]
+        return await self._request_summary_json(messages, "LLM validation response is not valid JSON")
+
+    async def _request_summary_json(self, messages: list[dict[str, str]], error_message: str) -> dict[str, Any]:
         url = self.settings.llm_base_url.rstrip("/") + "/chat/completions"
         payload = {
             "model": self.settings.llm_model,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": "你是严谨的会议摘要助手，只返回可解析 JSON。不要编造 transcript 中没有出现的待办事项。",
-                },
-                {"role": "user", "content": prompt},
-            ],
-            "temperature": 0.2,
+            "messages": messages,
+            "temperature": 0.1,
             "response_format": {"type": "json_object"},
         }
         headers = {"Authorization": f"Bearer {self.settings.llm_api_key}"}
@@ -100,7 +130,7 @@ class Summarizer:
             data = json.loads(content)
             return SummaryResult.model_validate(data).model_dump()
         except (KeyError, IndexError, TypeError, json.JSONDecodeError, ValidationError) as exc:
-            raise PipelineError("LLM response is not valid summary JSON") from exc
+            raise PipelineError(error_message) from exc
 
 
 class TaskWorker:
@@ -118,6 +148,7 @@ class TaskWorker:
     async def start(self) -> None:
         self._closed = False
         self._runner = asyncio.create_task(self._run(), name="task-worker")
+        # Recover unfinished tasks so a service restart does not leave them stuck forever.
         for task_id in self.repo.recoverable_task_ids():
             await self.enqueue(task_id)
         logger.info("worker started concurrency=%s", self.settings.worker_concurrency)
@@ -145,6 +176,7 @@ class TaskWorker:
             asyncio.create_task(self._guarded_process(task_id))
 
     async def _guarded_process(self, task_id: str) -> None:
+        # Semaphore limits how many long-running tasks can execute at the same time.
         async with self.semaphore:
             try:
                 await self._process(task_id)
@@ -159,6 +191,7 @@ class TaskWorker:
         attempt = self.repo.increment_attempt(task_id)
         logger.info("task=%s recording=%s attempt=%s started", task_id, task["recording_id"], attempt)
         try:
+            # State transitions are persisted so polling can show the current processing stage.
             self.repo.mark_status(task_id, "transcribing")
             transcript = await self.transcriber.transcribe(task["recording_id"])
             self.repo.save_transcript(task["recording_id"], transcript)

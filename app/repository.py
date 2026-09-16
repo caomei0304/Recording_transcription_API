@@ -45,6 +45,7 @@ class Repository:
         now = utc_now()
         recording_id = new_id("rec")
         task_id = new_id("task")
+        # Insert recording and its first task in one transaction so upload state is consistent.
         try:
             with self.db.transaction() as conn:
                 conn.execute(
@@ -76,6 +77,7 @@ class Repository:
                     (task_id, recording_id, now, now),
                 )
         except sqlite3.IntegrityError:
+            # Unique constraints implement idempotency; return the existing task instead of creating another one.
             existing = self.find_existing_recording(content_hash, idempotency_key)
             if existing is None:
                 raise
@@ -177,6 +179,7 @@ class Repository:
             task = dict(row)
             if task["status"] != "failed":
                 return task, False
+            # Retry is idempotent: repeated retry requests return the same replacement task.
             if task["retried_by_task_id"]:
                 retry = conn.execute("SELECT * FROM tasks WHERE id = ?", (task["retried_by_task_id"],)).fetchone()
                 return row_to_task(dict(retry)), True
@@ -196,6 +199,7 @@ class Repository:
             return row_to_task(dict(retry)), True
 
     def recoverable_task_ids(self) -> list[str]:
+        # On startup, unfinished non-deleted tasks are put back into the in-memory queue.
         rows = self.db.fetchall(
             """
             SELECT t.id FROM tasks t
@@ -209,6 +213,7 @@ class Repository:
 
     def mark_status(self, task_id: str, status: str, error: str | None = None, finished: bool = False) -> None:
         now = utc_now()
+        # Keep the first started_at timestamp when a task moves between processing stages.
         started_at_expr = "COALESCE(started_at, ?)" if status in {"transcribing", "summarizing"} else "started_at"
         finished_at = now if finished else None
         params: list[Any] = [status, error, now]

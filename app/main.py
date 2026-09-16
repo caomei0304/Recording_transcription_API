@@ -29,6 +29,7 @@ worker = TaskWorker(repo, settings)
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    # Startup owns database initialization and recovery of unfinished tasks.
     settings.upload_dir.mkdir(parents=True, exist_ok=True)
     db.init()
     await worker.start()
@@ -46,7 +47,7 @@ tags_metadata = [
 
 app = FastAPI(
     title="录音转写与智能摘要服务",
-    description="上传录音文件后，服务会异步完成 Mock 转写和智能摘要生成。",
+    description="上传录音文件后，服务会异步完成转写和智能摘要生成。",
     version="1.0.0",
     lifespan=lifespan,
     openapi_tags=tags_metadata,
@@ -77,6 +78,7 @@ async def save_upload(file: UploadFile, ext: str, settings: Settings) -> tuple[P
     hasher = hashlib.sha256()
     size = 0
     try:
+        # Stream the upload to disk instead of reading the whole file into memory.
         with temp_path.open("wb") as out:
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
@@ -119,6 +121,7 @@ async def upload_recording(
     temp_path, size, content_hash = await save_upload(file, ext, settings)
     created = False
     try:
+        # The repository enforces upload idempotency by Idempotency-Key or file hash.
         result, created = repository.create_recording_with_task(
             original_filename=file.filename,
             stored_filename=temp_path.name,

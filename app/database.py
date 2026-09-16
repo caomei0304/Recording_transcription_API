@@ -2,15 +2,19 @@ import json
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
 from app.config import Settings
 
 
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
 def utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    # API responses use Beijing time for easier local reading and debugging.
+    return datetime.now(BEIJING_TZ).isoformat()
 
 
 class Database:
@@ -62,6 +66,7 @@ class _Transaction:
         self.conn: sqlite3.Connection | None = None
 
     def __enter__(self) -> sqlite3.Connection:
+        # Serialize writes because SQLite allows limited concurrent write access.
         self.db._lock.acquire()
         self.conn = sqlite3.connect(self.db.path, timeout=30, check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
@@ -89,3 +94,4 @@ def parse_summary(value: str | None) -> dict[str, Any] | None:
     if not value:
         return None
     return json.loads(value)
+
