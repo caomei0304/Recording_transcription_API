@@ -214,17 +214,31 @@ http://localhost:8000/health
 ```mermaid
 flowchart TD
     Client[Client]
-    Client -->|multipart upload| API[FastAPI API]
+
+    Client -->|multipart upload<br/>POST /v1/recordings| API[FastAPI API]
+
     API -->|validate file| Validator[File Validator]
-    Validator -->|valid| SaveFile[Save File]
+    Validator -->|invalid| Error[Return 422<br/>Validation Error]
+    Validator -->|valid| SaveFile[Save File<br/>Local uploads]
+
     SaveFile --> CreateTask[Create Recording + Task]
-    CreateTask --> DB[(SQLite)]
-    DB -->|enqueue task_id| Queue[asyncio Queue]
-    Queue --> Worker[Background Worker]
-    Worker -->|pending -> transcribing| ASR[Transcription]
-    Worker -->|summarizing| LLM[LLM Summary]
-    Worker -->|transcript + summary + status| DB
-    Client -->|poll task/result| API
+    CreateTask -->|insert recording + task| DB[(SQLite)]
+    CreateTask -->|enqueue task_id| Queue[asyncio Queue]
+
+    Queue -->|consume task_id| Worker[Background Worker]
+
+    Worker -->|status = transcribing| ASR[Transcription<br/>ASR or Mock]
+    ASR -->|save transcript + status| DB
+
+    ASR -->|status = summarizing| LLM[LLM Summary<br/>LLM or Mock]
+    LLM -->|save summary + status| DB
+
+    LLM -->|status = done| Done[Task Completed]
+
+    Client -->|poll task/result<br/>GET /v1/tasks/task_id| API
+    API -->|read task/status/result| DB
+    DB -->|return task/result| API
+    API -->|response| Client
 ```
 
 ## 任务流程与并发控制
