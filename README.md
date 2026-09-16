@@ -211,35 +211,8 @@ http://localhost:8000/health
 
 ## 架构流程
 
-```mermaid
-flowchart TD
-    Client[Client]
+<img width="1024" height="1536" alt="353d7e04-2fa2-42ba-b8dc-fe0f5f564db2" src="https://github.com/user-attachments/assets/f398d973-9ff6-4148-aa32-de5e3dd0ee5d" />
 
-    Client -->|multipart upload<br/>POST /v1/recordings| API[FastAPI API]
-
-    API -->|validate file| Validator[File Validator]
-    Validator -->|invalid| Error[Return 422<br/>Validation Error]
-    Validator -->|valid| SaveFile[Save File<br/>Local uploads]
-
-    SaveFile --> CreateTask[Create Recording + Task]
-    CreateTask -->|insert recording + task| DB[(SQLite)]
-    CreateTask -->|enqueue task_id| Queue[asyncio Queue]
-
-    Queue -->|consume task_id| Worker[Background Worker]
-
-    Worker -->|status = transcribing| ASR[Transcription<br/>ASR or Mock]
-    ASR -->|save transcript + status| DB
-
-    ASR -->|status = summarizing| LLM[LLM Summary<br/>LLM or Mock]
-    LLM -->|save summary + status| DB
-
-    LLM -->|status = done| Done[Task Completed]
-
-    Client -->|poll task/result<br/>GET /v1/tasks/task_id| API
-    API -->|read task/status/result| DB
-    DB -->|return task/result| API
-    API -->|response| Client
-```
 
 ## 任务流程与并发控制
 
