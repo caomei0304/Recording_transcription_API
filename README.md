@@ -1,4 +1,4 @@
-# 录音转写服务 API
+﻿# 录音转写服务 API
 
 一个录音转写与智能摘要后端服务。支持音频上传、异步转写、摘要生成、任务查询、失败重试和录音删除。
 
@@ -212,12 +212,14 @@ http://localhost:8000/health
 ## 架构流程
 
 ```mermaid
-flowchart LR
-    Client[Client] -->|multipart upload| API[FastAPI API]
+flowchart TD
+    Client[Client]
+    Client -->|multipart upload| API[FastAPI API]
     API -->|validate file| Validator[File Validator]
-    API -->|save file| Disk[Local uploads]
-    API -->|recording + task| DB[(SQLite)]
-    API -->|enqueue task_id| Queue[asyncio Queue]
+    Validator -->|valid| SaveFile[Save File]
+    SaveFile --> CreateTask[Create Recording + Task]
+    CreateTask --> DB[(SQLite)]
+    DB -->|enqueue task_id| Queue[asyncio Queue]
     Queue --> Worker[Background Worker]
     Worker -->|pending -> transcribing| ASR[Transcription]
     Worker -->|summarizing| LLM[LLM Summary]
